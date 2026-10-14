@@ -1,0 +1,6 @@
+{
+  "name": "AB-SUTRA",
+  "description": "Contingent workforce lifecycle management, BGV compliance, Workday provisioning, and operational workflows.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
