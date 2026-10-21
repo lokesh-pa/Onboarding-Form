@@ -173,12 +173,13 @@ export const ProductDemoModal: React.FC<ProductDemoModalProps> = ({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
 
-  const currentChapter = DEMO_CHAPTERS[currentChapterIdx];
   const totalChapters = DEMO_CHAPTERS.length;
+  const safeChapterIdx = Math.max(0, Math.min(currentChapterIdx, totalChapters - 1));
+  const currentChapter = DEMO_CHAPTERS[safeChapterIdx] || DEMO_CHAPTERS[0];
 
   // Total duration of entire demo
-  const totalDemoDurationSec = DEMO_CHAPTERS.reduce((acc, c) => acc + c.durationSec, 0);
-  const elapsedTotalSec = DEMO_CHAPTERS.slice(0, currentChapterIdx).reduce((acc, c) => acc + c.durationSec, 0) + chapterElapsedSec;
+  const totalDemoDurationSec = DEMO_CHAPTERS.reduce((acc, c) => acc + (c?.durationSec || 10), 0);
+  const elapsedTotalSec = DEMO_CHAPTERS.slice(0, safeChapterIdx).reduce((acc, c) => acc + (c?.durationSec || 10), 0) + chapterElapsedSec;
 
   // Speak narration when chapter changes (if voiceover enabled)
   useEffect(() => {
@@ -187,7 +188,7 @@ export const ProductDemoModal: React.FC<ProductDemoModalProps> = ({
       return;
     }
 
-    if (!isVoiceoverMuted && 'speechSynthesis' in window && isPlaying) {
+    if (!isVoiceoverMuted && 'speechSynthesis' in window && isPlaying && currentChapter) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(currentChapter.narration);
       utterance.rate = playbackSpeed * 1.05;
@@ -200,7 +201,7 @@ export const ProductDemoModal: React.FC<ProductDemoModalProps> = ({
     } else if (isVoiceoverMuted && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
-  }, [currentChapterIdx, isVoiceoverMuted, isOpen, isPlaying, playbackSpeed]);
+  }, [safeChapterIdx, isVoiceoverMuted, isOpen, isPlaying, playbackSpeed, currentChapter]);
 
   // Clean up speech on unmount or close
   useEffect(() => {
@@ -220,25 +221,30 @@ export const ProductDemoModal: React.FC<ProductDemoModalProps> = ({
       const deltaSec = ((now - lastTickTimeRef.current) / 1000) * playbackSpeed;
       lastTickTimeRef.current = now;
 
-      setChapterElapsedSec((prev) => {
-        const next = prev + deltaSec;
-        if (next >= currentChapter.durationSec) {
-          // Advance to next chapter
-          if (currentChapterIdx < totalChapters - 1) {
-            setCurrentChapterIdx(idx => idx + 1);
-            return 0;
+      setChapterElapsedSec((prevElapsed) => {
+        const chapDuration = currentChapter?.durationSec || 10;
+        const nextElapsed = prevElapsed + deltaSec;
+
+        if (nextElapsed >= chapDuration) {
+          // If there are more chapters, advance to next chapter safely
+          if (safeChapterIdx < totalChapters - 1) {
+            setTimeout(() => {
+              setCurrentChapterIdx((c) => Math.min(c + 1, totalChapters - 1));
+              setChapterElapsedSec(0);
+            }, 0);
+            return chapDuration;
           } else {
-            // Loop or finish
+            // Reached the end of the entire demo
             setIsPlaying(false);
-            return currentChapter.durationSec;
+            return chapDuration;
           }
         }
-        return next;
+        return nextElapsed;
       });
     }, 50);
 
     return () => clearInterval(interval);
-  }, [isOpen, isPlaying, playbackSpeed, currentChapterIdx, currentChapter.durationSec, totalChapters]);
+  }, [isOpen, isPlaying, playbackSpeed, safeChapterIdx, currentChapter?.durationSec, totalChapters]);
 
   // Canvas drawing loop: draws high-definition animated mock UI and scene visuals
   const renderCanvasScene = useCallback((ctx: CanvasRenderingContext2D, width: number, height: number, progressRatio: number) => {
@@ -741,7 +747,7 @@ export const ProductDemoModal: React.FC<ProductDemoModalProps> = ({
     return () => {
       cancelAnimationFrame(animId);
     };
-  }, [isOpen, chapterElapsedSec, currentChapter.durationSec, renderCanvasScene]);
+  }, [isOpen, chapterElapsedSec, currentChapter?.durationSec, renderCanvasScene]);
 
   // Handle Fullscreen
   const toggleFullscreen = () => {
@@ -755,31 +761,35 @@ export const ProductDemoModal: React.FC<ProductDemoModalProps> = ({
 
   // Jump to specific chapter
   const handleSelectChapter = (idx: number) => {
-    setCurrentChapterIdx(idx);
+    const safeIdx = Math.max(0, Math.min(idx, totalChapters - 1));
+    setCurrentChapterIdx(safeIdx);
     setChapterElapsedSec(0);
     setIsPlaying(true);
   };
 
   // Skip forward 5s / backward 5s
   const handleSkip = (seconds: number) => {
-    setChapterElapsedSec((prev) => {
-      const next = prev + seconds;
-      if (next < 0) {
-        if (currentChapterIdx > 0) {
-          setCurrentChapterIdx(c => c - 1);
-          return 0;
-        }
-        return 0;
+    const chapDuration = currentChapter?.durationSec || 10;
+    const next = chapterElapsedSec + seconds;
+
+    if (next < 0) {
+      if (safeChapterIdx > 0) {
+        setCurrentChapterIdx((c) => Math.max(0, c - 1));
+        setChapterElapsedSec(0);
+      } else {
+        setChapterElapsedSec(0);
       }
-      if (next > currentChapter.durationSec) {
-        if (currentChapterIdx < totalChapters - 1) {
-          setCurrentChapterIdx(c => c + 1);
-          return 0;
-        }
-        return currentChapter.durationSec;
+    } else if (next >= chapDuration) {
+      if (safeChapterIdx < totalChapters - 1) {
+        setCurrentChapterIdx((c) => Math.min(c + 1, totalChapters - 1));
+        setChapterElapsedSec(0);
+      } else {
+        setChapterElapsedSec(chapDuration);
+        setIsPlaying(false);
       }
-      return next;
-    });
+    } else {
+      setChapterElapsedSec(next);
+    }
   };
 
   // Video Export / Download Feature using Canvas MediaRecorder
@@ -881,7 +891,7 @@ export const ProductDemoModal: React.FC<ProductDemoModalProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">
-                Chapter {currentChapterIdx + 1} of {totalChapters}: {currentChapter.title}
+                Chapter {safeChapterIdx + 1} of {totalChapters}: {currentChapter?.title || ''}
               </p>
             </div>
           </div>
@@ -954,9 +964,9 @@ export const ProductDemoModal: React.FC<ProductDemoModalProps> = ({
           {/* Chapter Division Scrubber Bar */}
           <div className="flex items-center space-x-1.5 w-full">
             {DEMO_CHAPTERS.map((chap, idx) => {
-              const isPast = idx < currentChapterIdx;
-              const isCurrent = idx === currentChapterIdx;
-              const currentProgressPct = isCurrent ? (chapterElapsedSec / chap.durationSec) * 100 : isPast ? 100 : 0;
+              const isPast = idx < safeChapterIdx;
+              const isCurrent = idx === safeChapterIdx;
+              const currentProgressPct = isCurrent ? (chapterElapsedSec / (chap?.durationSec || 10)) * 100 : isPast ? 100 : 0;
 
               return (
                 <button
@@ -1033,7 +1043,7 @@ export const ProductDemoModal: React.FC<ProductDemoModalProps> = ({
             {/* Middle: Active Tagline */}
             <div className="hidden md:flex items-center space-x-2 text-[11px] text-slate-400 font-medium">
               <Sparkles className="w-3.5 h-3.5 text-blue-400" />
-              <span className="text-slate-300">{currentChapter.tagline}</span>
+              <span className="text-slate-300">{currentChapter?.tagline || ''}</span>
             </div>
 
             {/* Right: Audio Narration, Speed & Live Action */}
@@ -1068,7 +1078,7 @@ export const ProductDemoModal: React.FC<ProductDemoModalProps> = ({
               </div>
 
               {/* Try Feature Live Button */}
-              {onNavigateToFeature && (
+              {onNavigateToFeature && currentChapter?.actionFeature && (
                 <button
                   onClick={() => {
                     onClose();
@@ -1076,7 +1086,7 @@ export const ProductDemoModal: React.FC<ProductDemoModalProps> = ({
                   }}
                   className="flex items-center space-x-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition"
                 >
-                  <span>{currentChapter.actionLabel}</span>
+                  <span>{currentChapter?.actionLabel || 'Try Feature'}</span>
                   <ArrowRight className="w-3.5 h-3.5" />
                 </button>
               )}
@@ -1096,7 +1106,7 @@ export const ProductDemoModal: React.FC<ProductDemoModalProps> = ({
                     key={c.id}
                     onClick={() => handleSelectChapter(i)}
                     className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition ${
-                      i === currentChapterIdx
+                      i === safeChapterIdx
                         ? 'bg-blue-600/20 text-blue-300 border border-blue-500/40 font-semibold'
                         : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
                     }`}
@@ -1112,7 +1122,7 @@ export const ProductDemoModal: React.FC<ProductDemoModalProps> = ({
             <div className="space-y-1.5">
               <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Governance &amp; Features Shown</span>
               <ul className="space-y-1.5">
-                {currentChapter.keyHighlights.map((hl, hIdx) => (
+                {(currentChapter?.keyHighlights || []).map((hl, hIdx) => (
                   <li key={hIdx} className="flex items-start text-xs text-slate-300 space-x-2">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />
                     <span>{hl}</span>
